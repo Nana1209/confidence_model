@@ -5,11 +5,16 @@ import json
 import random
 import re
 
+from eval_agentnet import parse_action, print_result
+
 
 def process_dataset(path, image_path, model_path, checkpoint_file="train.checkpoint"):
     processor = AutoProcessor.from_pretrained(model_path)
-    device = torch.device("cuda:3")
-    model = AutoModelForVision2Seq.from_pretrained(model_path).to(device)
+    device = torch.device("cuda:0")
+    model = AutoModelForVision2Seq.from_pretrained(
+        model_path,
+        torch_dtype=torch.float16
+        ).to(device)
 
     start_line = 0
     if os.path.exists(checkpoint_file):
@@ -55,7 +60,7 @@ def process_dataset(path, image_path, model_path, checkpoint_file="train.checkpo
                         }
                     )
                     n = min(5, len(previous_actions_list))
-                    previous_actions = "\n-------------".join(
+                    previous_actions = "\n-------------\n".join(
                         previous_actions_list[-n:]
                     )
                     messages.append(
@@ -105,15 +110,16 @@ def process_dataset(path, image_path, model_path, checkpoint_file="train.checkpo
                 )
 
                 print(output_test)
-
-                jsondata = {
-                    "messages": messages,
-                    "images": images,
-                    "teacher_action": teacher_action,
-                    "id": f"{data['task_id']}+{action['index']}",
-                }
-                json_line = json.dumps(jsondata, ensure_ascii=False)
-
+                thought, action_pred, conf_pred = parse_action(output_test)
+                pattern = r"<\|box_start\|>\((-?\d+),\s*(-?\d+)\)<\|box_end\|>"
+                m_t = re.search(pattern, action_pred)
+                m_s = re.search(pattern, teacher_action)
+                if m_t and m_s:
+                    x_t, y_t = map(int, m_t.groups())
+                    x_s, y_s = map(int, m_s.groups())
+                print_result(
+                    image_path + action["image"], x_t, y_t, x_s, y_s
+                )
             print("-------------------------------")
             json_new = json.dumps(data, ensure_ascii=False)
             # 更新检查点（每处理一行就更新）
@@ -130,10 +136,10 @@ def process_dataset(path, image_path, model_path, checkpoint_file="train.checkpo
 
 if __name__ == "__main__":
     model_path = (
-        "/newdata/zhouxy/model/trained_models/uitars_lora_sft_agentnet/merged0911"
+        "/data/zhouxy35/model/merged0911"
     )
-    image_path = "/newdata/zhouxy/dataset/AgentNet/social_media/images/"
-    path = "/newdata/zhouxy/dataset/AgentNet/social_media/social_media_confidence_rule.jsonl"
+    image_path = "/data/zhouxy35/dataset/AgentNet/social_media/images/"
+    path = "/data/zhouxy35/dataset/AgentNet/social_media/social_media_confidence_rule.jsonl"
 
     print("开始处理数据集...")
     process_dataset(path, image_path, model_path)

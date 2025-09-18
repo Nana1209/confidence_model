@@ -168,7 +168,16 @@ def eval_action(action, teacher, screen_w):
         raise ValueError(f"无法识别的代码: {teacher}")
     return s_right, confidence
 
-
+def parse_action(content: str) -> str:
+    pattern = r"Thought:(.*?)\nAction:(.*?)\nConfidence:(\d+)"
+    m = re.search(pattern, content, re.S)
+    if m:
+        thought = m.group(1).strip()
+        action = m.group(2).strip()
+        conf = int(m.group(3))
+    else:
+        print(f"无法解析 action{content}")
+    return thought, action, conf
 def eval_agentnet(eval_path, t=4):
     tt = 0  # tp confidence==5 action==teacher
     tf = 0  # 假阴fn 需要但不执行交互
@@ -216,12 +225,12 @@ def eval_agentnet(eval_path, t=4):
     print(f"AP(自主准确率)={tt / (tt + ft)}")
 
 
-def print_result(data, x_t, y_t, x_s, y_s):
+def print_result(image_url, x_t, y_t, x_s, y_s):
     demo = f"{datetime.now():%Y%m%d_%H%M%S}"  # uuid.uuid4().hex
-    user_content = data["messages"][-2]["content"]
-    for item in user_content:
-        if item["type"] == "image":
-            image_url = item["url"]
+    # user_content = data["messages"][-2]["content"]
+    # for item in user_content:
+    #     if item["type"] == "image":
+    #         image_url = item["url"]
     src = Image.open(image_url)
 
     overlay = Image.new("RGBA", src.size, (0, 0, 0, 0))
@@ -232,20 +241,20 @@ def print_result(data, x_t, y_t, x_s, y_s):
     draw.ellipse(
         [(x_s - r, y_s - r), (x_s + r, y_s + r)], fill=(255, 0, 0, 128)
     )  # alpha=128 -> 50 %
-    dst = src.convert("RGBA")  # 副本
+    # dst = src.convert("RGBA")  # 副本
 
     draw.ellipse(
         [(x_t - r, y_t - r), (x_t + r, y_t + r)], fill=(0, 255, 0, 128)
     )  # alpha=128 -> 50 %
     dst = src.convert("RGBA")  # 副本
     dst = Image.alpha_composite(dst, overlay)
-
+    # dst.show()
     # 4. 保存/查看副本，原图文件完好
     dst.save(f"{demo}.png")
-    file_path = f"{demo}.json"
-    with open(file_path, "w") as f:
-        json_l = json.dumps(data, ensure_ascii=False)
-        f.write(json_l)
+    # file_path = f"{demo}.json"
+    # with open(file_path, "w") as f:
+    #     json_l = json.dumps(data, ensure_ascii=False)
+    #     f.write(json_l)
 
 
 if __name__ == "__main__":
