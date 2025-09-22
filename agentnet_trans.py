@@ -120,6 +120,7 @@ def answer_dataset(path, image_path, w_path, checkpoint_file=".checkpoint"):
 def process_dataset(
     path, image_path, train_path, eval_path, checkpoint_file="train.checkpoint"
 ):
+    """agentnet生成数据集，历史action放messages的历史对话中"""
     start_line = 0
     if os.path.exists(checkpoint_file):
         with open(checkpoint_file, "r") as f:
@@ -167,7 +168,7 @@ def process_dataset(
                             "content": f"You are a GUI agent. You are given a task and your action history, with screenshots. You need to perform the next action and confidence to complete the task. \n\n## Output Format\n```\nThought: ...\nAction: ...\nConfidence: ...\n```\n\n## Action Space\n\nclick(start_box='<|box_start|>(x1, y1)<|box_end|>')\nleft_double(start_box='<|box_start|>(x1, y1)<|box_end|>')\nright_single(start_box='<|box_start|>(x1, y1)<|box_end|>')\ndrag(start_box='<|box_start|>(x1, y1)<|box_end|>', end_box='<|box_start|>(x3, y3)<|box_end|>')\nhotkey(key='')\ntype(content='') #If you want to submit your input, use \"\\n\" at the end of `content`.\nscroll(start_box='<|box_start|>(x1, y1)<|box_end|>', direction='down or up or right or left')\nwait() #Sleep for 5s and take a screenshot to check for any changes.\nfinished(content='xxx') # Use escape characters \\', \\\", and \\n in content part to ensure we can parse the content in normal python string format.\n\n\n## Note\n- Use Chinese in `Thought` part.\n- Write a small plan and finally summarize your next action (with its target element) in one sentence in `Thought` part. Evaluate your action to be scored, giving it a score from 1 to 5 in 'Confidence' part. A higher score indicates that you believe this action is more likely to accomplish the current goal for the given screenshot.\n\n## User Instruction\n{final_goal}",
                         }
                     )
-                    n = min(5, len(previous_actions_list))
+                    n = min(1, len(previous_actions_list))  # 添加历史对话
                     previous_actions = "\n-------------".join(
                         previous_actions_list[-n:]
                     )
@@ -276,6 +277,153 @@ def process_dataset(
     print("claude_count:", claude_count)
 
 
+def gen_dataset(
+    path, image_path, train_path, eval_path, checkpoint_file="train.checkpoint"
+):
+    """生成训练集和验证集，历史action放user prompt中"""
+    prompt = "You are a GUI agent. You are given a task and your action history, with screenshots. You need to perform the next action and confidence to complete the task. \n\n## Output Format\n```\nThought: ...\nAction: ...\nConfidence: ...\n```\n\n## Action Space\n\nclick(start_box='<|box_start|>(x1, y1)<|box_end|>')\nleft_double(start_box='<|box_start|>(x1, y1)<|box_end|>')\nright_single(start_box='<|box_start|>(x1, y1)<|box_end|>')\ndrag(start_box='<|box_start|>(x1, y1)<|box_end|>', end_box='<|box_start|>(x3, y3)<|box_end|>')\nhotkey(key='')\ntype(content='') #If you want to submit your input, use \"\\n\" at the end of `content`.\nscroll(start_box='<|box_start|>(x1, y1)<|box_end|>', direction='down or up or right or left')\nwait() #Sleep for 5s and take a screenshot to check for any changes.\nfinished(content='xxx') # Use escape characters \\', \\\", and \\n in content part to ensure we can parse the content in normal python string format.\n\n\n## Note\n- Use Chinese in `Thought` part.\n- Write a small plan and finally summarize your next action (with its target element) in one sentence in `Thought` part. Evaluate your action to be scored, giving it a score from 1 to 5 in 'Confidence' part. A higher score indicates that you believe this action is more likely to accomplish the current goal for the given screenshot.\n\n## User Instruction\n{final_goal}\n\n## Previous Actions\n{previous_actions}\n<image>"
+
+    start_line = 0
+    if os.path.exists(checkpoint_file):
+        with open(checkpoint_file, "r") as f:
+            start_line = int(f.read().strip())
+        print(f"从第 {start_line} 行开始续传")
+    rule_count = 0
+    claude_count = 0
+    with (
+        open(path, "r", encoding="utf-8") as f,
+        open(train_path, "a" if start_line > 0 else "w", encoding="utf-8") as f_t,
+        open(eval_path, "a" if start_line > 0 else "w", encoding="utf-8") as f_e,
+    ):
+        # 跳过已经处理的行
+        for _ in range(start_line):
+            next(f)
+
+        for line_num, line in enumerate(f, start_line + 1):
+            line = line.strip()
+            if not line:  # 跳过空行
+                continue
+            data = json.loads(line)
+            previous_actions_list = []  # agentnet里的历史动作，当作pre
+            if data["task_difficulty"] < 7:
+                actions = data["traj"]
+            else:
+                actions = data["traj"][:10]
+            final_goal = data["natural_language_task"]
+
+            for i, action in enumerate(actions):
+                confidence = action["confidence"]
+                messages = []
+                images = [image_path + action["image"]]
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": "You are a helpful assistant.",
+                    }
+                )
+                if previous_actions_list:
+                    n = min(5, len(previous_actions_list))  # 添加历史对话
+                    previous_actions = "\n".join(previous_actions_list[-n:])
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": prompt.format(
+                                final_goal=final_goal, previous_actions=previous_actions
+                            ),
+                        }
+                    )
+                else:
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": prompt.format(
+                                final_goal=final_goal, previous_actions="None"
+                            ),
+                        }
+                    )
+                teacher_action = (
+                    action["value"]["code_uitars"]
+                    if action["value"]["last_step_correct"]
+                    else action["claude"]
+                )
+                # pattern = r"Thought:(.*?)\nAction:(.*?)"
+                # m = re.search(pattern, action["uitars"], re.S)
+                m = re.search(
+                    r"Thought:\s*(.*?)\s+Action:\s*(.*?)(?:<\|im_end\|>|$)",
+                    action["uitars"],
+                    re.S,
+                )
+                if m:
+                    thought = m.group(1).strip()
+                    stu_action = m.group(2).strip()
+                else:
+                    continue
+                if stu_action == "":
+                    raise ValueError(f"无法识别的代码: {action['uitars']}")
+                confidence_rule = action["confidence_rule"]
+
+                # assistant = f"{action['uitars']}\nConfidence:{confidence}" #claude生成的confidence
+                assistant = (
+                    f"{action['uitars']}\nConfidence:{confidence_rule}"
+                    if confidence_rule > confidence
+                    else f"{action['uitars']}\nConfidence:{confidence}"
+                )  # 规则生成的confidence
+                if confidence_rule < 5:
+                    rule_count += 1
+                if confidence < 5:
+                    claude_count += 1
+                previous_actions_list.append(action["value"]["action"])
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": assistant,
+                    }
+                )
+
+                jsondata = {
+                    "messages": messages,
+                    "images": images,
+                    "teacher_action": teacher_action,
+                    "id": f"{data['task_id']}+{action['index']}",
+                }
+                json_line = json.dumps(jsondata, ensure_ascii=False)
+                if random.random() < 0.80:
+                    f_t.write(json_line + "\n")
+                else:
+                    f_e.write(json_line + "\n")
+                # 非5分的把teacher——action作为5分数据加入数据集
+                if confidence_rule < 5:
+                    messages.pop()
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": f"Thought:{action['value']['thought']}\nAction:{teacher_action}\nConfidence:5",
+                        }
+                    )
+                    jsondata = {
+                        "messages": messages,
+                        "images": images,
+                        "teacher_action": teacher_action,
+                        "id": f"{data['task_id']}+{action['index']}",
+                    }
+                    json_line = json.dumps(jsondata, ensure_ascii=False)
+                    if random.random() < 0.80:
+                        f_t.write(json_line + "\n")
+                    else:
+                        f_e.write(json_line + "\n")
+
+            # 更新检查点（每处理一行就更新）
+            with open(checkpoint_file, "w") as f_check:
+                f_check.write(str(line_num))
+
+    # 处理完成后删除检查点文件
+    if os.path.exists(checkpoint_file):
+        os.remove(checkpoint_file)
+    print("处理完成！")
+    print("rule_count:", rule_count)
+    print("claude_count:", claude_count)
+
+
 def view_dataset():
     """
     action转换：
@@ -370,12 +518,12 @@ if __name__ == "__main__":
     # view_dataset()
     # answer_dataset(path, image_path, w_path)
     image_path = "/newdata/zhouxy/dataset/AgentNet/social_media/images/"
-    path = "/newdata/zhouxy/dataset/AgentNet/social_media/social_media_confidence.jsonl"
+    path = "/newdata/zhouxy/dataset/AgentNet/social_media/social_media_confidence_rule.jsonl"
     train_path = (
-        "/newdata/zhouxy/dataset/AgentNet/social_media/social_media_train_rule.jsonl"
+        "/newdata/zhouxy/dataset/AgentNet/social_media/social_media_train_pre.jsonl"
     )
     eval_path = (
-        "/newdata/zhouxy/dataset/AgentNet/social_media/social_media_eval_rule.jsonl"
+        "/newdata/zhouxy/dataset/AgentNet/social_media/social_media_eval_pre.jsonl"
     )
     print("开始处理数据集...")
-    process_dataset(path, image_path, train_path, eval_path)
+    gen_dataset(path, image_path, train_path, eval_path)
