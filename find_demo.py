@@ -31,7 +31,7 @@ def process_dataset(path, image_path, model_path, checkpoint_file="train.checkpo
             next(f)
 
         for line_num, line in enumerate(f, start_line + 1):
-            line = line.strip()
+            line = line.strip() 
             if not line:  # 跳过空行
                 continue
             data = json.loads(line)
@@ -40,8 +40,12 @@ def process_dataset(path, image_path, model_path, checkpoint_file="train.checkpo
                 actions = data["traj"]
             else:
                 actions = data["traj"][:10]
+                continue  # 先不测难的
             final_goal = data["natural_language_task"]
-
+            if 'follow ' not in final_goal:
+                continue
+            task_id=data["task_id"]
+            print(f"Processing task_id: {task_id}")
             for i, action in enumerate(actions):
                 confidence = action["confidence"]
                 messages = []
@@ -117,10 +121,8 @@ def process_dataset(path, image_path, model_path, checkpoint_file="train.checkpo
                 if m_t and m_s:
                     x_t, y_t = map(int, m_t.groups())
                     x_s, y_s = map(int, m_s.groups())
-                print_result(
-                    image_path + action["image"], x_t, y_t, x_s, y_s
-                )
-            print("-------------------------------")
+                # print_result(image_path + action["image"], x_t, y_t, x_s, y_s)
+            print("-------------------------------\n")
             json_new = json.dumps(data, ensure_ascii=False)
             # 更新检查点（每处理一行就更新）
             with open(checkpoint_file, "w") as f_check:
